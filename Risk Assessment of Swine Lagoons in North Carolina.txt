@@ -1,0 +1,85 @@
+import arcpy
+
+myWorkspace = "C:\\Users\\Hong Fan\\Documents\\College\\Fall 2014\\GEOG 592\\Midterm Project"
+arcpy.env.workspace = myWorkspace
+arcpy.env.overwriteOutput = True
+
+swineLagoons = "Swine Lagoons.shp"
+northCarolinaCensusTracts = "North Carolina Census Tracts.shp"
+
+rowsToRead = arcpy.da.SearchCursor(swineLagoons, ["COUNTY"])
+listOfSwineLagoonCounties = []
+for row in rowsToRead:
+    listOfSwineLagoonCounties.append(str(row[0]))
+
+listOfNorthCarolinaCounties = ["Alamance", "Alexander", "Alleghany",  "Anson", "Ashe", "Avery", "Beaufort", "Bertie", "Bladen", "Brunswick", "Buncombe", "Burke", "Cabarrus", "Caldwell", "Camden", "Carteret", "Caswell", "Catawba", "Chatham", "Cherokee", "Chowan", "Clay", "Cleveland", "Columbus", "Craven", "Cumberland", "Currituck", "Dare", "Davidson", "Davie", "Duplin", "Durham", "Edgecombe", "Forsyth", "Franklin", "Gaston", "Gates", "Graham", "Granville", "Greene", "Guilford", "Halifax", "Harnett", "Haywood", "Henderson", "Hertford", "Hoke", "Hyde", "Iredell", "Jackson", "Johnston", "Jones", "Lee", "Lenoir", "Lincoln", "McDowell", "Macon", "Madison", "Martin", "Mecklenburg", "Mitchell", "Montgomery", "Moore", "Nash", "New Hanover", "Northampton", "Onslow", "Orange", "Pamlico", "Pasquotank", "Pender", "Perquimans", "Person", "Pitt", "Polk", "Randolph", "Richmond", "Robeson", "Rockingham", "Rowan", "Rutherford", "Sampson", "Scotland", "Stanly", "Stokes", "Surry", "Swain", "Transylvania", "Tyrrell", "Union", "Vance", "Wake", "Warren", "Washington", "Watauga", "Wayne", "Wilkes", "Wilson", "Yadkin", "Yancey"]
+averageNumberOfHogsPerSiteForCounties = [0, 0, 0, 7822, 0, 0, 7822, 11806, 11432, 6454, 0, 0, 7822, 0, 0, 0, 0, 0, 2100, 0, 7822, 0, 0, 7496, 4328, 3832, 0, 0, 0, 1325, 5701, 0, 10106, 0, 5766, 0, 7822, 0, 7822, 5967, 2817, 12908, 7050, 0, 0, 7080, 4114, 0, 0, 0, 4085, 4896, 7822, 4172, 0, 0, 0, 0, 7822, 0, 0, 5503, 7822, 4441, 0, 7822, 3605, 7822, 1350, 0, 6682, 7822, 7822, 7822, 0, 3644,    7822, 13972, 7822, 7822, 0, 7663, 7822, 7822, 7822, 6833, 0, 0, 7822, 7822, 0, 7822, 8780, 7822, 0, 4583, 0, 8000, 7822, 0]
+
+arcpy.AddField_management(swineLagoons, "EST_HogPop", "FLOAT")
+rowsToAddData = arcpy.da.UpdateCursor(swineLagoons, ["EST_HogPop"])
+counter = 0
+for row in rowsToAddData:
+    currentCounty = listOfSwineLagoonCounties[counter]
+    countyIndex = listOfNorthCarolinaCounties.index(currentCounty)
+    
+rowsToAddData.updateRow([averageNumberOfHogsPerSiteForCounties[countyIndex]])
+
+currentMeanCenter = "currentMeanCenter.shp"
+currentMeanCenterBuffer = "currentMeanCenterBuffer.shp"
+swineLagoonsSurroundingMeanCenter = "swineLagoonsSurroundingMeanCenter.shp"
+riskLevels = "riskLevels.dbf"
+distanceTable = "distanceTable.dbf"
+bufferDistance = "5 Miles"
+
+arcpy.CreateTable_management(myWorkspace, riskLevels)
+arcpy.AddField_management(riskLevels, "ObjectID", "LONG")
+arcpy.AddField_management(riskLevels, "RISK_LEVEL", "FLOAT")
+arcpy.DeleteField_management(riskLevels, "Field1")
+
+rowsToRead = arcpy.da.SearchCursor(northCarolinaCensusTracts, ["Shape@", "ObjectID"])
+rowsToBeInserted = arcpy.da.InsertCursor(riskLevels, ("ObjectID", "RISK_LEVEL"))
+listOfRiskLevels = []
+counter = 0
+
+for row in rowsToRead:
+    currentTract = row[0]
+    currentTractObjectID = int(row[1])
+    
+    arcpy.MeanCenter_stats(currentTract, currentMeanCenter, "", "", "")
+    arcpy.Buffer_analysis(currentMeanCenter, currentMeanCenterBuffer, bufferDistance, "FULL", "ROUND", "NONE", "")
+    arcpy.Clip_analysis(swineLagoons, currentMeanCenterBuffer, swineLagoonsSurroundingMeanCenter, "")
+
+    arcpy.GenerateNearTable_analysis(currentMeanCenter, swineLagoons, distanceTable, bufferDistance, "NO_LOCATION", "NO_ANGLE", "ALL", "")
+    arcpy.AddField_management(swineLagoonsSurroundingMeanCenter, "NEAR_FID", "DOUBLE")
+    arcpy.CalculateField_management(swineLagoonsSurroundingMeanCenter, "NEAR_FID", "!OBJECTID! - 1", "PYTHON", "")
+    arcpy.JoinField_management(swineLagoonsSurroundingMeanCenter, "NEAR_FID", distanceTable, "NEAR_FID")
+    
+    lagoonsInRange = arcpy.da.SearchCursor(swineLagoonsSurroundingMeanCenter, ["EST_HogPop", "NEAR_DIST"])
+    riskLevel = 0
+    for aLagoon in lagoonsInRange:
+        hogPopulation = float(aLagoon[0])
+        distance = float(aLagoon[1])
+        riskLevel += hogPopulation/distance
+
+    rowsToBeInserted.insertRow((long(currentTractObjectID), float(riskLevel)))
+    counter += 1
+    if counter == 1:
+        print "The risk level of 1 census tract has been calculated."
+    else:
+        print "The risk levels of " + str(counter) + " census tracts have been calculated."
+
+del rowsToRead
+del rowsToAddData
+del lagoonsInRange
+del rowsToBeInserted
+
+arcpy.JoinField_management(northCarolinaCensusTracts, "ObjectID", riskLevels, "ObjectID")
+
+arcpy.Delete_management(currentMeanCenter, "")
+arcpy.Delete_management(currentMeanCenterBuffer, "")
+arcpy.Delete_management(swineLagoonsSurroundingMeanCenter, "")
+arcpy.Delete_management(riskLevels, "")
+arcpy.Delete_management(distanceTable, "")
+print "Intermediate data deleted."
+
+print "Script completed."
